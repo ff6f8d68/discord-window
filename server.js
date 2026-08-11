@@ -2,6 +2,7 @@ import express from 'express';
 import http from 'http';
 import { WebSocketServer } from 'ws';
 import puppeteer from 'puppeteer';
+import { parse } from 'url';
 
 const app = express();
 const server = http.createServer(app);
@@ -10,54 +11,64 @@ const wss = new WebSocketServer({ server });
 app.use(express.static('public'));
 app.get('/health', (req, res) => res.status(200).send('OK'));
 
-wss.on('connection', async (ws) => {
+wss.on('connection', async (ws, req) => {
+  // 1. Extract ?site= directly from the WebSocket handshake URL
+  const { query } = parse(req.url, true);
+  let targetUrl = query.site || 'https://youtube.com';
+  if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+    targetUrl = 'https://' + targetUrl;
+  }
+
+  // 2. Launch headless browser
   const browser = await puppeteer.launch({
-    headless: 'new',
+    headless: 'shell',
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
-      '--single-process', // Minimizes RAM overhead
-      '--no-zygote'
+      '--disable-gpu',
+      '--no-zygote',
+      '--single-process',
+      '--window-size=1280,720'
     ]
   });
 
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 720 });
 
-  // 1. Attach directly to the Chrome DevTools Protocol (CDP) session
+  // 3. Attach Chrome DevTools Protocol Screencast
   const cdp = await page.target().createCDPSession();
 
-  // 2. Listen for native compositor frame events
   cdp.on('Page.screencastFrame', async (frame) => {
     if (ws.readyState === ws.OPEN) {
-      // Send raw base64 frame buffer
       ws.send(frame.data);
     }
-    // Acknowledge the frame to keep Chrome streaming smoothly
     try {
       await cdp.send('Page.screencastFrameAck', { sessionId: frame.sessionId });
-    } catch (e) {
-      // Ignore if session closed
-    }
+    } catch (e) {}
   });
 
-  // 3. Start high-frequency screencast
+  // 4. Start high-performance streaming
   await cdp.send('Page.startScreencast', {
     format: 'jpeg',
-    quality: 55,           // Slightly lower quality dramatically boosts FPS
+    quality: 60,
     maxWidth: 1280,
     maxHeight: 720,
-    everyNthFrame: 1       // Capture every painted frame
+    everyNthFrame: 1
   });
 
-  // Handle client input events
+  // 5. Navigate immediately on connection
+  try {
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  } catch (err) {
+    console.error('Initial navigation error:', err.message);
+  }
+
+  // Handle client mouse and keyboard inputs
   ws.on('message', async (data) => {
     try {
       const msg = JSON.parse(data);
-      if (msg.type === 'navigate') {
-        await page.goto(msg.url, { waitUntil: 'domcontentloaded' });
-      } else if (msg.type === 'click') {
+      if (msg.type === 'click') {
         await page.mouse.click(msg.x, msg.y);
       } else if (msg.type === 'keydown') {
         await page.keyboard.press(msg.key);
@@ -75,4 +86,4 @@ wss.on('connection', async (ws) => {
   });
 });
 
-server.listen(3000, () => console.log('60 FPS Virtual Engine running on http://localhost:3000'));
+server.listen(3000, () => console.log('Virtual Browser running on http://localhost:3000'));
