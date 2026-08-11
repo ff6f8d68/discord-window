@@ -6,11 +6,12 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "build": "npm install && npx puppeteer browsers install chrome"
+    "build": "npm install"
   },
   "dependencies": {
+    "@sparticuz/chromium": "^123.0.1",
     "express": "^4.19.2",
-    "puppeteer": "^22.6.0",
+    "puppeteer-core": "^22.6.0",
     "ws": "^8.16.0"
   },
   "engines": {
