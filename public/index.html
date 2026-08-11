@@ -3,46 +3,78 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Virtual Browser</title>
+  <title>Discord.window</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100vw; height: 100vh; overflow: hidden; background: #000; }
+    html, body { width: 100vw; height: 100vh; overflow: hidden; background: #0f0f17; display: flex; align-items: center; justify-content: center; }
     canvas {
       width: 100vw;
       height: 100vh;
       object-fit: contain;
       display: block;
       cursor: pointer;
-      will-change: transform;
-      transform: translateZ(0);
+    }
+    #status {
+      position: absolute;
+      color: #94a3b8;
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 16px;
+      letter-spacing: 0.5px;
+      pointer-events: none;
+      z-index: 10;
     }
   </style>
 </head>
 <body>
 
+  <div id="status">Connecting to virtual browser session...</div>
   <canvas id="viewport" width="1280" height="720"></canvas>
 
   <script>
     const canvas = document.getElementById('viewport');
     const ctx = canvas.getContext('2d', { alpha: false });
+    const statusEl = document.getElementById('status');
 
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
 
     let latestImage = null;
     let pendingImage = null;
+    let frameReceived = false;
 
-    // Automatically forward the current URL query parameters (?site=https://youtube.com) to the WebSocket
+    // Connect via secure WebSocket (wss://) matching the current host and query parameters
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}${window.location.search}`;
     const ws = new WebSocket(wsUrl);
 
+    ws.onopen = () => {
+      statusEl.textContent = 'Connected! Loading target page...';
+    };
+
     ws.onmessage = (event) => {
+      if (!frameReceived) {
+        frameReceived = true;
+        statusEl.style.display = 'none'; // Hide status text once first frame arrives
+      }
+
       const img = new Image();
       img.onload = () => {
         pendingImage = img;
       };
       img.src = 'data:image/jpeg;base64,' + event.data;
+    };
+
+    ws.onerror = (err) => {
+      statusEl.textContent = 'WebSocket Error: Connection failed.';
+      statusEl.style.color = '#ef4444';
+      console.error('WS Error:', err);
+    };
+
+    ws.onclose = () => {
+      if (!frameReceived) {
+        statusEl.textContent = 'Disconnected from server.';
+        statusEl.style.color = '#ef4444';
+      }
     };
 
     // 60 FPS Render Loop
@@ -61,7 +93,7 @@
 
     requestAnimationFrame(renderLoop);
 
-    // Click relay
+    // Mouse click relay
     canvas.addEventListener('click', (e) => {
       const rect = canvas.getBoundingClientRect();
       const x = (e.clientX - rect.left) * (canvas.width / rect.width);
