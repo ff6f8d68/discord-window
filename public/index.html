@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Virtual Browser Stream</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0f0f17; color: #fff; font-family: system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    #controls { width: 1280px; padding: 10px 0; display: flex; gap: 8px; }
+    input { flex: 1; padding: 10px; background: #1e1e2e; border: 1px solid #313244; color: #fff; border-radius: 6px; outline: none; }
+    button { padding: 10px 20px; background: #89b4fa; color: #11111b; border: none; font-weight: bold; border-radius: 6px; cursor: pointer; }
+    canvas { 
+      width: 1280px; 
+      height: 720px; 
+      background: #000; 
+      border-radius: 8px; 
+      border: 1px solid #313244; 
+      cursor: pointer;
+      /* CSS hardware acceleration hint */
+      will-change: transform;
+      transform: translateZ(0);
+    }
+  </style>
+</head>
+<body>
+
+  <div id="controls">
+    <input id="urlInput" type="text" placeholder="https://youtube.com or https://google.com" />
+    <button onclick="navigate()">Go</button>
+  </div>
+
+  <canvas id="viewport" width="1280" height="720"></canvas>
+
+  <script>
+    const canvas = document.getElementById('viewport');
+    const ctx = canvas.getContext('2d', { alpha: false }); // Disable alpha for faster rendering
+    const input = document.getElementById('urlInput');
+
+    // Enable hardware smoothing
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    // Double-buffering state
+    let latestImage = null;
+    let pendingImage = null;
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${window.location.host}`);
+
+    // Receive base64 frame from CDP Screencast
+    ws.onmessage = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        pendingImage = img; // Stage the new frame
+      };
+      img.src = 'data:image/jpeg;base64,' + event.data;
+    };
+
+    // 60 FPS+ Client-Side Render Loop
+    function renderLoop() {
+      if (pendingImage) {
+        latestImage = pendingImage;
+        pendingImage = null;
+      }
+
+      if (latestImage) {
+        ctx.drawImage(latestImage, 0, 0, canvas.width, canvas.height);
+      }
+
+      requestAnimationFrame(renderLoop);
+    }
+
+    // Start 60 FPS animation frame loop immediately
+    requestAnimationFrame(renderLoop);
+
+    function navigate() {
+      let target = input.value.trim();
+      if (!target.startsWith('http')) target = 'https://' + target;
+      ws.send(JSON.stringify({ type: 'navigate', url: target }));
+    }
+
+    // Auto-navigate if ?site= parameter exists
+    const params = new URLSearchParams(window.location.search);
+    const initialSite = params.get('site');
+    ws.onopen = () => {
+      if (initialSite) {
+        input.value = initialSite;
+        navigate();
+      }
+    };
+
+    // Forward click inputs
+    canvas.addEventListener('click', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+      const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+      ws.send(JSON.stringify({ type: 'click', x, y }));
+    });
+
+    // Forward keyboard inputs
+    window.addEventListener('keydown', (e) => {
+      if (document.activeElement === input) return;
+      ws.send(JSON.stringify({ type: 'keydown', key: e.key }));
+    });
+  </script>
+</body>
+</html>
