@@ -8,37 +8,50 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 app.use(express.static('public'));
+app.get('/health', (req, res) => res.status(200).send('OK'));
 
 wss.on('connection', async (ws) => {
-  // Launch a real Chromium instance on the server
   const browser = await puppeteer.launch({
     headless: 'new',
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
-      '--window-size=1280,720'
+      '--single-process', // Minimizes RAM overhead
+      '--no-zygote'
     ]
   });
 
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 720 });
 
-  // Stream JPEG frame buffer to the client canvas
-  let isStreaming = true;
-  const renderLoop = async () => {
-    while (isStreaming && ws.readyState === ws.OPEN) {
-      try {
-        const buffer = await page.screenshot({ type: 'jpeg', quality: 65 });
-        ws.send(buffer);
-      } catch (err) {
-        break;
-      }
-      await new Promise(resolve => setTimeout(resolve, 66)); // ~15 FPS
-    }
-  };
+  // 1. Attach directly to the Chrome DevTools Protocol (CDP) session
+  const cdp = await page.target().createCDPSession();
 
-  // Handle inbound interactions from client
+  // 2. Listen for native compositor frame events
+  cdp.on('Page.screencastFrame', async (frame) => {
+    if (ws.readyState === ws.OPEN) {
+      // Send raw base64 frame buffer
+      ws.send(frame.data);
+    }
+    // Acknowledge the frame to keep Chrome streaming smoothly
+    try {
+      await cdp.send('Page.screencastFrameAck', { sessionId: frame.sessionId });
+    } catch (e) {
+      // Ignore if session closed
+    }
+  });
+
+  // 3. Start high-frequency screencast
+  await cdp.send('Page.startScreencast', {
+    format: 'jpeg',
+    quality: 55,           // Slightly lower quality dramatically boosts FPS
+    maxWidth: 1280,
+    maxHeight: 720,
+    everyNthFrame: 1       // Capture every painted frame
+  });
+
+  // Handle client input events
   ws.on('message', async (data) => {
     try {
       const msg = JSON.parse(data);
@@ -50,16 +63,16 @@ wss.on('connection', async (ws) => {
         await page.keyboard.press(msg.key);
       }
     } catch (e) {
-      console.error('Interaction error:', e.message);
+      console.error('Input Error:', e.message);
     }
   });
 
-  renderLoop();
-
   ws.on('close', async () => {
-    isStreaming = false;
+    try {
+      await cdp.send('Page.stopScreencast');
+    } catch (e) {}
     await browser.close();
   });
 });
 
-server.listen(3000, () => console.log('Virtual Browser running on http://localhost:3000'));
+server.listen(3000, () => console.log('60 FPS Virtual Engine running on http://localhost:3000'));
