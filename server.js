@@ -1,14 +1,14 @@
 import express from 'express';
 import http from 'http';
 import { WebSocketServer } from 'ws';
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-core';
+import chromium from '@sparticuz/chromium';
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 app.use(express.static('public'));
-
 app.get('/health', (req, res) => res.status(200).send('OK'));
 
 wss.on('connection', async (ws, req) => {
@@ -16,7 +16,6 @@ wss.on('connection', async (ws, req) => {
   let cdp = null;
 
   try {
-    // Use modern WHATWG URL API instead of deprecated url.parse()
     const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
     let targetUrl = parsedUrl.searchParams.get('site') || 'https://youtube.com';
     
@@ -24,17 +23,16 @@ wss.on('connection', async (ws, req) => {
       targetUrl = 'https://' + targetUrl;
     }
 
+    // Launch using @sparticuz/chromium for cloud/Render environments
     browser = await puppeteer.launch({
-      headless: 'new',
       args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
+        ...chromium.args,
         '--disable-gpu',
-        '--no-first-run',
-        '--no-initial-navigation-checks',
         '--window-size=1280,720'
-      ]
+      ],
+      defaultViewport: { width: 1280, height: 720 },
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
     });
 
     const page = await browser.newPage();
